@@ -96,7 +96,7 @@ Puppet::Type.type(:firewall).provide :iptables, :parent => Puppet::Provider::Fir
   # This order can be determined by going through iptables source code or just tweaking and trying manually
   @resource_list = [:table, :source, :destination, :iniface, :outiface,
     :proto, :tcp_flags, :gid, :uid, :sport, :dport, :port, :socket, :pkttype, :name, :state, :icmp, :limit, :burst,
-#    :recent_update, :recent_set, :recent_rcheck, :recent_remove, :recent_seconds, :recent_hitcount,
+    :recent_update, :recent_set, :recent_rcheck, :recent_remove, :recent_seconds, :recent_hitcount,
     :recent_rttl, :recent_name, :recent_rsource, :recent_rdest,
     :jump, :todest, :tosource, :toports, :log_level, :log_prefix, :reject, :set_mark]
   @resource_list_noargs = [:recent_set, :recent_update, :recent_rcheck,
@@ -352,16 +352,18 @@ Puppet::Type.type(:firewall).provide :iptables, :parent => Puppet::Provider::Fir
 
     resource_list.each do |res|
       resource_value = nil
-      if !(resource_list_recent_commands.include?(res)) && (resource[res]) then
+      if !(resource_list_recent_commands.include?(res)) then
+        if (resource[res]) then
           resource_value = resource[res]
           if resource_list_noargs.include?(res) then
             resource_value = nil
           end
-      elsif res == :jump and resource[:action] then
-        # In this case, we are substituting jump for action
-        resource_value = resource[:action].to_s.upcase
-      else
-        next
+        elsif res == :jump and resource[:action] then
+          # In this case, we are substituting jump for action
+          resource_value = resource[:action].to_s.upcase
+        else
+          next
+        end
       end
 
       what = res.to_s.scan(/^recent_(\w+)/)
