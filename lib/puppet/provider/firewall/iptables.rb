@@ -162,10 +162,7 @@ Puppet::Type.type(:firewall).provide :iptables, :parent => Puppet::Provider::Fir
 
     # These are known booleans that do not take a value, but we want to munge
     # to true if they exist.
-    #known_booleans = [:recent_set, :recent_update, :recent_rcheck,
-    #  :recent_remove, :recent_rsource, :recent_rdest, :socket]
-    known_booleans = @resource_list_noargs
-    #puts "known_booleans: %s " % known_booleans.join(', ')
+    known_booleans = @resource_list_noargs.nil? ? [ ] : @resource_list_noargs
 
     ####################
     # PRE-PARSE CLUDGING
