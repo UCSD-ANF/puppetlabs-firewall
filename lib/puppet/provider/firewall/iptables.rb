@@ -14,6 +14,7 @@ Puppet::Type.type(:firewall).provide :iptables, :parent => Puppet::Provider::Fir
   has_feature :icmp_match
   has_feature :owner
   has_feature :state_match
+  has_feature :recent_match
   has_feature :reject_type
   has_feature :log_level
   has_feature :log_prefix
@@ -55,6 +56,16 @@ Puppet::Type.type(:firewall).provide :iptables, :parent => Puppet::Provider::Fir
     :proto => "-p",
     :reject => "--reject-with",
     :set_mark => mark_flag,
+    :recent_set => "-m recent --set",
+    :recent_update => "-m recent --update",
+    :recent_remove => "-m recent --remove",
+    :recent_rcheck => "-m recent --rcheck",
+    :recent_name => "--name",
+    :recent_rsource => "--rsource",
+    :recent_rdest => "--rdest",
+    :recent_seconds => "--seconds",
+    :recent_hitcount => "--hitcount",
+    :recent_rttl => "--rttl",
     :socket => "-m socket",
     :source => "-s",
     :sport => ["-m multiport --sports", "-m (udp|tcp) --sport"],
@@ -85,7 +96,11 @@ Puppet::Type.type(:firewall).provide :iptables, :parent => Puppet::Provider::Fir
   # This order can be determined by going through iptables source code or just tweaking and trying manually
   @resource_list = [:table, :source, :destination, :iniface, :outiface,
     :proto, :tcp_flags, :gid, :uid, :sport, :dport, :port, :socket, :pkttype, :name, :state, :icmp, :limit, :burst,
+    :recent_update, :recent_set, :recent_rcheck, :recent_remove, :recent_seconds, :recent_hitcount,
+    :recent_rttl, :recent_name, :recent_rsource, :recent_rdest,
     :jump, :todest, :tosource, :toports, :log_level, :log_prefix, :reject, :set_mark]
+  @resource_list_noargs = [:recent_set, :recent_update, :recent_rcheck,
+    :recent_remove, :recent_rsource, :recent_rdest, :socket]
 
   def insert
     debug 'Inserting rule %s' % resource[:name]
@@ -93,7 +108,7 @@ Puppet::Type.type(:firewall).provide :iptables, :parent => Puppet::Provider::Fir
   end
 
   def update
-    debug 'Updating rule %s' % resource[:name]
+    debug 'Updating rule  %s' % resource[:name]
     iptables update_args
   end
 
@@ -146,7 +161,10 @@ Puppet::Type.type(:firewall).provide :iptables, :parent => Puppet::Provider::Fir
 
     # These are known booleans that do not take a value, but we want to munge
     # to true if they exist.
-    known_booleans = [:socket]
+    #known_booleans = [:recent_set, :recent_update, :recent_rcheck,
+    #  :recent_remove, :recent_rsource, :recent_rdest, :socket]
+    known_booleans = @resource_list_noargs
+    #puts "known_booleans: %s " % known_booleans.join(', ')
 
     ####################
     # PRE-PARSE CLUDGING
@@ -158,7 +176,8 @@ Puppet::Type.type(:firewall).provide :iptables, :parent => Puppet::Provider::Fir
 
     # Trick the system for booleans
     known_booleans.each do |bool|
-      values = values.sub(/#{@resource_map[bool]}/, '-m socket true')
+      values = values.sub(/#{@resource_map[bool]}/,
+                          "#{@resource_map[bool]} true")
     end
 
     ############
@@ -210,11 +229,16 @@ Puppet::Type.type(:firewall).provide :iptables, :parent => Puppet::Provider::Fir
     # Our type prefers hyphens over colons for ranges so ...
     # Iterate across all ports replacing colons with hyphens so that ranges match
     # the types expectations.
-    [:dport, :sport, :port].each do |prop|
-      next unless hash[prop]
-      hash[prop] = hash[prop].collect do |elem|
-        elem.gsub(/:/,'-')
+    begin
+      [:dport, :sport, :port].each do |prop|
+        next unless hash[prop]
+        hash[prop] = hash[prop].collect do |elem|
+          elem.gsub(/:/,'-')
+        end
       end
+    rescue => exp
+      puts "Error at range delimiting: " + exp
+      raise
     end
 
     # States should always be sorted. This ensures that the output from
@@ -233,6 +257,20 @@ Puppet::Type.type(:firewall).provide :iptables, :parent => Puppet::Provider::Fir
     if hash[:jump] == 'LOG' && ! hash[:log_level]
       hash[:log_level] = '4'
     end
+
+    # Handle recent module
+    hash[:recent_command] = :set if hash.include?(:recent_set)
+    hash[:recent_command] = :update if hash.include?(:recent_update)
+    hash[:recent_command] = :remove if hash.include?(:recent_remove)
+    hash[:recent_command] = :rcheck if hash.include?(:recent_rcheck)
+
+    [:recent_set, :recent_update, :recent_remove, :recent_rcheck].each do |key|
+      hash.delete(key)
+    end
+
+    # rsource is the default if rdest isn't set and recent is being used
+    hash[:recent_rsource] = true if \
+        hash.key?:recent_command and ! hash[:recent_rdest]
 
     hash[:line] = line
     hash[:provider] = self.name.to_s
@@ -270,7 +308,12 @@ Puppet::Type.type(:firewall).provide :iptables, :parent => Puppet::Provider::Fir
 
   def delete_args
     count = []
-    line = properties[:line].gsub(/\-A/, '-D').split
+    begin
+      line = properties[:line].gsub(/(^|\s+)-A\s+/, '\\1-D ').split
+    rescue => exp
+      puts "Error at delete_args(): " + exp
+      raise
+    end
 
     # Grab all comment indices
     line.each do |v|
@@ -279,12 +322,13 @@ Puppet::Type.type(:firewall).provide :iptables, :parent => Puppet::Provider::Fir
       end
     end
 
-    if ! count.empty?
-      # Remove quotes and set first comment index to full string
-      line[count.first] = line[count.first..count.last].join(' ').gsub(/"/, '')
-
-      # Make all remaining comment indices nil
-      ((count.first + 1)..count.last).each do |i|
+    # Merge the quoted comments/etc into one element
+    count.reverse!
+    while ! count.empty?
+      startidx = count.pop
+      stopidx  = count.pop
+      line[startidx] = line[startidx..stopidx].join(' ').gsub(/"/, '')
+      ((startidx + 1)..stopidx).each do |i|
         line[i] = nil
       end
     end
@@ -302,44 +346,74 @@ Puppet::Type.type(:firewall).provide :iptables, :parent => Puppet::Provider::Fir
 
     args = []
     resource_list = self.class.instance_variable_get('@resource_list')
+    resource_list_noargs = self.class.instance_variable_get('@resource_list_noargs')
     resource_map = self.class.instance_variable_get('@resource_map')
+    resource_list_recent_commands = [:recent_set, :recent_update, :recent_rcheck, :recent_remove]
 
     resource_list.each do |res|
       resource_value = nil
-      if (resource[res]) then
-        resource_value = resource[res]
-        # If socket is true then do not add the value as -m socket is standalone
-        if res == :socket then
-          resource_value = nil
+      if !(resource_list_recent_commands.include?(res)) then
+        if (resource[res]) then
+          resource_value = resource[res]
+          if resource_list_noargs.include?(res) then
+            resource_value = nil
+          end
+        elsif res == :jump and resource[:action] then
+          # In this case, we are substituting jump for action
+          resource_value = resource[:action].to_s.upcase
+        else
+          next
         end
-      elsif res == :jump and resource[:action] then
-        # In this case, we are substituting jump for action
-        resource_value = resource[:action].to_s.upcase
-      else
-        next
+      end
+
+      what = res.to_s.scan(/^recent_(\w+)/)
+      if ! what.empty?
+        # only append recent_ args if there is a recent_command
+        if ! (resource['recent_command'])
+          next
+        end
+        # only append the right recent_ command
+        if resource_list_recent_commands.include?(res) and \
+            resource['recent_command'].to_s != what[0][0]
+          next
+        end
+        # only append rsource/rdest if set
+        if res == :recent_rsource and not resource['recent_rsource']:
+          next
+        end
+        if res == :recent_rdest and not resource['recent_rdest']:
+          next
+        end
       end
 
       args << [resource_map[res]].flatten.first.split(' ')
 
       # For sport and dport, convert hyphens to colons since the type
       # expects hyphens for ranges of ports.
-      if [:sport, :dport, :port].include?(res) then
-        resource_value = resource_value.collect do |elem|
-          elem.gsub(/-/, ':')
+      begin
+        if [:sport, :dport, :port].include?(res) then
+          resource_value = resource_value.collect do |elem|
+            elem.gsub(/-/, ':')
+          end
         end
+      rescue => exp
+        puts "Error at general_args(): " + exp
+        raise
       end
 
-      # our tcp_flags takes a single string with comma lists separated
-      # by space
-      # --tcp-flags expects two arguments
-      if res == :tcp_flags
-        one, two = resource_value.split(' ')
-        args << one
-        args << two
-      elsif resource_value.is_a?(Array)
-        args << resource_value.join(',')
-      elsif !resource_value.nil?
-        args << resource_value
+      if !resource_list_noargs.include?(res) then
+        # our tcp_flags takes a single string with comma lists separated
+        # by space
+        # --tcp-flags expects two arguments
+        if res == :tcp_flags
+          one, two = resource_value.split(' ')
+          args << one
+          args << two
+        elsif resource_value.is_a?(Array)
+          args << resource_value.join(',')
+        else
+          args << resource_value
+        end
       end
     end
 
