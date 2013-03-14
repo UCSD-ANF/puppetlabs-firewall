@@ -706,4 +706,27 @@ HASH_TO_ARGS = {
     },
     :args => ['-t', :mangle, '-p', :tcp, '-m', 'socket', '-m', 'comment', '--comment', '050 socket option', '-j', 'ACCEPT'],
   },
+  'recent update' => {
+    :params => {
+      :name            => '100 ssh connection limit',
+      :recent_command  => 'update',
+      :recent_seconds  => 60,
+      :recent_hitcount => 4,
+      :recent_name     => 'sshlimit',
+    },
+    :args   => ['-t', :filter, '-p', :tcp,
+      '-m', 'comment', '--comment', '100 ssh connection limit',
+      '-m', 'recent', '--update', '--seconds', 60, '--hitcount', 4,
+      '--name', 'sshlimit'],
+  },
+  'recent options but no action' => {
+    :params => {
+      :name             => '100 recent options with no action',
+      :recent_seconds   => 60,
+      :recent_hitcount  => 4,
+      :recent_name      => 'sshlimit',
+    },
+    :args => ['-t', :filter, '-p', :tcp, '-m', 'comment', '--comment',
+      '100 recent options with no action'],
+  },
 }
