@@ -56,6 +56,7 @@ Puppet::Type.type(:firewall).provide :iptables, :parent => Puppet::Provider::Fir
     :proto => "-p",
     :reject => "--reject-with",
     :set_mark => mark_flag,
+    :recent_command => '-m recent',
     :recent_set => "-m recent --set",
     :recent_update => "-m recent --update",
     :recent_remove => "-m recent --remove",
